@@ -74,7 +74,7 @@ llm-tracker-for-wordpress/
 │   └── js/admin.js
 ├── llms.txt
 └── readme.txt
-
+```
 ###
 <h2 align="left">🧠 Tecnologías Utilizadas</h2>
 <div align="left"> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/php/php-original.svg" height="40" alt="php logo" /> <img width="12" /> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mysql/mysql-original.svg" height="40" alt="mysql logo" /> <img width="12" /> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/wordpress/wordpress-original.svg" height="40" alt="wordpress logo" /> <img width="12" /> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/bootstrap/bootstrap-original.svg" height="40" alt="bootstrap logo" /> <img width="12" /> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/jquery/jquery-original.svg" height="40" alt="jquery logo" /> <img width="12" /> <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/javascript/javascript-original.svg" height="40" alt="javascript logo" /> </div>
@@ -84,4 +84,4 @@ llm-tracker-for-wordpress/
 <p align="left"> <b>C0d3k</b> – Desarrollador Web & Especialista en Seguridad<br> 🌐 <a href="https://jhony33663.github.io/Portafolio_Ck/">Website</a> | 💼 <a href="https://github.com/Jhony33663">LinkedIn</a>
 <h2 align="left">⭐ Apoya el Proyecto</h2>
 <p align="left"> ⭐ Dale una estrella en GitHub<br> 🐛 Reporta bugs y mejora el código<br> 💡 Sugiere nuevas funcionalidades<br> <a href="https://buymeacoffee.com/c0d3k" target="_blank">☕ Invítame un café ☕</a><br> 🎉 ¡Gracias por usar LLM Tracker! </p>
-<div align="center"> <br><br> <p>Hecho con ❤️ por <b>C0d3k</b></p>```
+<div align="center"> <br><br> <p>Hecho con ❤️ por <b>C0d3k</b></p>
