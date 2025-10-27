@@ -83,5 +83,5 @@ llm-tracker-for-wordpress/
 <h2 align="left">👨‍💻 Autor</h2>
 <p align="left"> <b>C0d3k</b> – Desarrollador Web & Especialista en Seguridad<br> 🌐 <a href="https://jhony33663.github.io/Portafolio_Ck/">Website</a> | 💼 <a href="https://github.com/Jhony33663">LinkedIn</a>
 <h2 align="left">⭐ Apoya el Proyecto</h2>
-<p align="left"> ⭐ Dale una estrella en GitHub<br> 🐛 Reporta bugs y mejora el código<br> 💡 Sugiere nuevas funcionalidades<br> ☕ Invítame un café ☕<br> 🎉 ¡Gracias por usar LLM Tracker! </p>
+<p align="left"> ⭐ Dale una estrella en GitHub<br> 🐛 Reporta bugs y mejora el código<br> 💡 Sugiere nuevas funcionalidades<br> <a href="https://buymeacoffee.com/c0d3k" target="_blank">☕ Invítame un café ☕</a><br> 🎉 ¡Gracias por usar LLM Tracker! </p>
 <div align="center"> <br><br> <p>Hecho con ❤️ por <b>C0d3k</b></p>```
