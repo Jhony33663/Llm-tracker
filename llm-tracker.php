@@ -1,15 +1,15 @@
 <?php
 /**
- * Plugin Name: LLM Tracker for WordPress
- * Plugin URI: https://uide.edu.ec
+ * Plugin Name: llm-tracker-pro
+ * Plugin URI: https://github.com/Jhony33663/Llm-tracker
  * Description: Plugin para rastrear las visitas de LLMs al archivo llms.txt con registro detallado de fecha, hora y origen.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Jonathan Mata
  * Author URI: https://ec.linkedin.com/in/jonathan-david-mata-rodriguez-62a925203
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain: llm-tracker
- * Domain Path: /languages
+ * Text Domain: llm-tracker-pro
+ * Domain Path: 
  */
 
 // Prevenir acceso directo
@@ -81,7 +81,8 @@ class LLM_Tracker {
      */
     public function activate() {
         $this->create_tracking_table();
-        $this->create_llms_txt_file();
+        $this->create_logs_table();
+        $this->create_llms_txt_file_root();
         flush_rewrite_rules();
     }
     
@@ -135,11 +136,345 @@ class LLM_Tracker {
     }
     
     /**
-     * Crear archivo llms.txt
+     * Crear archivo llms.txt en la raíz del sitio
      */
-    private function create_llms_txt_file() {
+    public function create_llms_txt_file_root() {
+        $llms_file = ABSPATH . 'llms.txt';
+        
+        // Verificar si ya existe y hacer copia de seguridad
+        if (file_exists($llms_file)) {
+            $this->backup_llms_txt_file();
+        }
+        
+        // Generar contenido primero
         $llms_content = $this->generate_llms_content();
-        file_put_contents(LLM_TRACKER_PLUGIN_DIR . 'llms.txt', $llms_content);
+        
+        // Método 1: Intentar crear y escribir directamente
+        if (file_put_contents($llms_file, $llms_content) !== false) {
+            chmod($llms_file, 0644);
+            $this->log_llms_action('created', 'root', 'Archivo creado con file_put_contents directo');
+            return true;
+        }
+        
+        // Método 2: Usar touch primero
+        if ($this->create_file_with_touch($llms_file)) {
+            if (file_put_contents($llms_file, $llms_content) !== false) {
+                chmod($llms_file, 0644);
+                $this->log_llms_action('created', 'root', 'Archivo creado usando touch + file_put_contents');
+                return true;
+            }
+        }
+        
+        // Método 3: fopen + fwrite
+        if ($this->create_file_with_fopen($llms_file, $llms_content)) {
+            chmod($llms_file, 0644);
+            $this->log_llms_action('created', 'root', 'Archivo creado usando fopen + fwrite');
+            return true;
+        }
+        
+        // Método 4: Usar wp_filesystem
+        if ($this->create_file_with_wp_filesystem($llms_file, $llms_content)) {
+            chmod($llms_file, 0644);
+            $this->log_llms_action('created', 'root', 'Archivo creado usando WP_Filesystem');
+            return true;
+        }
+        
+        // Método 5: Intentar crear en directorio temporal y mover
+        if ($this->create_file_with_temp_move($llms_file, $llms_content)) {
+            chmod($llms_file, 0644);
+            $this->log_llms_action('created', 'root', 'Archivo creado usando método temporal + move');
+            return true;
+        }
+        
+        // Guardar error detallado en log
+        $error_details = 'Error al crear archivo. Métodos fallidos: file_put_contents, touch, fopen, WP_Filesystem, temp+move. Ruta: ' . $llms_file . ', Permisos: ' . substr(sprintf('%o', fileperms(ABSPATH)), -4);
+        $this->log_llms_action('error', 'root', $error_details);
+        return false;
+    }
+    
+    /**
+     * Crear archivo usando comando touch del sistema operativo
+     */
+    private function create_file_with_touch($file_path) {
+        try {
+            // Detectar sistema operativo y usar comando apropiado
+            if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                // Windows: usar type nul
+                $command = 'type nul > ' . escapeshellarg($file_path);
+            } else {
+                // Unix/Linux/Mac: usar touch
+                $command = 'touch ' . escapeshellarg($file_path);
+            }
+            
+            // Ejecutar comando
+            $output = array();
+            $return_code = 0;
+            exec($command, $output, $return_code);
+            
+            // Verificar si el comando se ejecutó correctamente y el archivo existe
+            if ($return_code === 0 && file_exists($file_path)) {
+                return true;
+            }
+            
+            // Si el comando falló, intentar método alternativo
+            return $this->create_file_alternative($file_path);
+            
+        } catch (Exception $e) {
+            // En caso de error, usar método alternativo
+            return $this->create_file_alternative($file_path);
+        }
+    }
+    
+    /**
+     * Método alternativo para crear archivo sin comandos del sistema
+     */
+    private function create_file_alternative($file_path) {
+        try {
+            // Intentar crear usando fopen
+            $handle = fopen($file_path, 'w');
+            if ($handle) {
+                fclose($handle);
+                return true;
+            }
+            
+            // Intentar crear usando file_put_contents con string vacío
+            if (file_put_contents($file_path, '') !== false) {
+                return true;
+            }
+            
+        } catch (Exception $e) {
+            // Error capturado
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Crear archivo usando fopen + fwrite
+     */
+    private function create_file_with_fopen($file_path, $content) {
+        try {
+            $handle = fopen($file_path, 'w');
+            if ($handle) {
+                $result = fwrite($handle, $content);
+                fclose($handle);
+                return $result !== false;
+            }
+        } catch (Exception $e) {
+            // Error capturado
+        }
+        return false;
+    }
+    
+    /**
+     * Crear archivo usando WP_Filesystem
+     */
+    private function create_file_with_wp_filesystem($file_path, $content) {
+        try {
+            global $wp_filesystem;
+            
+            // Inicializar WP_Filesystem si no está inicializado
+            if (empty($wp_filesystem)) {
+                require_once(ABSPATH . 'wp-admin/includes/file.php');
+                WP_Filesystem();
+            }
+            
+            if ($wp_filesystem) {
+                return $wp_filesystem->put_contents($file_path, $content);
+            }
+        } catch (Exception $e) {
+            // Error capturado
+        }
+        return false;
+    }
+    
+    /**
+     * Crear archivo usando método temporal + move
+     */
+    private function create_file_with_temp_move($file_path, $content) {
+        try {
+            // Crear archivo temporal
+            $temp_file = tempnam(sys_get_temp_dir(), 'llms_temp_');
+            
+            if ($temp_file) {
+                // Escribir contenido en archivo temporal
+                if (file_put_contents($temp_file, $content) !== false) {
+                    // Intentar mover a la ubicación final
+                    if (rename($temp_file, $file_path)) {
+                        return true;
+                    }
+                    // Si rename falla, intentar copy
+                    if (copy($temp_file, $file_path)) {
+                        unlink($temp_file);
+                        return true;
+                    }
+                }
+                // Limpiar archivo temporal
+                unlink($temp_file);
+            }
+        } catch (Exception $e) {
+            // Error capturado
+        }
+        return false;
+    }
+    
+    /**
+     * Crear copia de seguridad del archivo llms.txt existente
+     */
+    private function backup_llms_txt_file() {
+        $llms_file = ABSPATH . 'llms.txt';
+        $backup_dir = ABSPATH . 'wp-content/uploads/llm-tracker-backups/';
+        
+        // Crear directorio de backups si no existe
+        if (!file_exists($backup_dir)) {
+            wp_mkdir_p($backup_dir);
+        }
+        
+        // Generar nombre de archivo de backup
+        $timestamp = gmdate('Y-m-d_H-i-s');
+        $backup_file = $backup_dir . 'llms-backup-' . $timestamp . '.txt';
+        
+        // Copiar archivo original
+        if (copy($llms_file, $backup_file)) {
+            // Guardar registro del backup
+            $this->log_llms_action('backup', 'root', 'Backup creado: ' . basename($backup_file));
+            return $backup_file;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Registrar acciones de llms.txt en la base de datos
+     */
+    private function log_llms_action($action, $location, $description) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'llm_tracker_logs';
+        
+        // Crear tabla de logs si no existe
+        $this->create_logs_table();
+        
+        $wpdb->insert(
+            $table_name,
+            array(
+                'action' => $action,
+                'location' => $location,
+                'description' => $description,
+                'created_at' => current_time('mysql')
+            ),
+            array('%s', '%s', '%s', '%s')
+        );
+    }
+    
+    /**
+     * Crear tabla de logs para llms.txt
+     */
+    private function create_logs_table() {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'llm_tracker_logs';
+        
+        $charset_collate = $wpdb->get_charset_collate();
+        
+        $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            action varchar(50) NOT NULL,
+            location varchar(50) NOT NULL,
+            description text NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY action (action),
+            KEY created_at (created_at)
+        ) $charset_collate;";
+        
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+    
+    /**
+     * Leer contenido del archivo llms.txt desde la raíz
+     */
+    public function read_llms_txt_file() {
+        $llms_file = ABSPATH . 'llms.txt';
+        
+        if (file_exists($llms_file)) {
+            return file_get_contents($llms_file);
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Escribir contenido en el archivo llms.txt de la raíz
+     */
+    public function write_llms_txt_file($content) {
+        $llms_file = ABSPATH . 'llms.txt';
+        
+        // Hacer backup antes de sobrescribir
+        if (file_exists($llms_file)) {
+            $this->backup_llms_txt_file();
+        }
+        
+        // Escribir nuevo contenido
+        if (file_put_contents($llms_file, $content)) {
+            $this->log_llms_action('updated', 'root', 'Archivo actualizado manualmente');
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Obtener lista de backups disponibles
+     */
+    public function get_llms_backups() {
+        $backup_dir = ABSPATH . 'wp-content/uploads/llm-tracker-backups/';
+        $backups = array();
+        
+        if (file_exists($backup_dir)) {
+            $files = scandir($backup_dir);
+            foreach ($files as $file) {
+                if ($file !== '.' && $file !== '..' && strpos($file, 'llms-backup-') === 0) {
+                    $filepath = $backup_dir . $file;
+                    $backups[] = array(
+                        'filename' => $file,
+                        'filepath' => $filepath,
+                        'size' => filesize($filepath),
+                        'modified' => filemtime($filepath),
+                        'url' => content_url('uploads/llm-tracker-backups/' . $file)
+                    );
+                }
+            }
+        }
+        
+        // Ordenar por fecha de modificación (más reciente primero)
+        usort($backups, function($a, $b) {
+            return $b['modified'] - $a['modified'];
+        });
+        
+        return $backups;
+    }
+    
+    /**
+     * Restaurar backup
+     */
+    public function restore_llms_backup($backup_file) {
+        $backup_path = ABSPATH . 'wp-content/uploads/llm-tracker-backups/' . $backup_file;
+        $llms_file = ABSPATH . 'llms.txt';
+        
+        if (file_exists($backup_path)) {
+            // Hacer backup del archivo actual antes de restaurar
+            if (file_exists($llms_file)) {
+                $this->backup_llms_txt_file();
+            }
+            
+            if (copy($backup_path, $llms_file)) {
+                $this->log_llms_action('restored', 'root', 'Backup restaurado: ' . $backup_file);
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     /**
@@ -149,33 +484,97 @@ class LLM_Tracker {
         $site_url = get_site_url();
         $site_name = get_bloginfo('name');
         $admin_email = get_option('admin_email');
+        $site_description = get_bloginfo('description');
+        
+        // Escapar comillas en valores para YAML válido
+        $site_name_escaped = str_replace('"', '\\"', $site_name);
+        $site_description_escaped = str_replace('"', '\\"', $site_description);
         
         $content = "# LLMs Configuration File\n";
-        $content .= "# This file provides configuration for Language Learning Models visiting this site\n\n";
-        $content .= "# Site Information\n";
-        $content .= "name: {$site_name}\n";
-        $content .= "url: {$site_url}\n";
-        $content .= "description: WordPress site with LLM tracking capabilities\n";
-        $content .= "version: 1.0.0\n";
-        $content .= "last_updated: " . date('Y-m-d H:i:s') . "\n";
-        $content .= "admin_email: {$admin_email}\n\n";
-        $content .= "# Available Endpoints for LLMs\n";
+        $content .= "# Optimized YAML format with Markdown syntax for maximum LLM compatibility\n";
+        $content .= "# Generated: " . gmdate('Y-m-d H:i:s') . "\n\n";
+        
+        $content .= "# === SITE INFORMATION ===\n";
+        $content .= "name: \"{$site_name_escaped}\"\n";
+        $content .= "url: \"{$site_url}\"\n";
+        $content .= "description: |\n";
+        $content .= "  {$site_description_escaped}\n";
+        $content .= "  WordPress site with LLM tracking and analytics capabilities\n";
+        $content .= "  Optimized for Language Learning Model interactions\n\n";
+        
+        $content .= "# === METADATA ===\n";
+        $content .= "version: \"1.0.0\"\n";
+        $content .= "last_updated: \"" . gmdate('Y-m-d H:i:s') . "\"\n";
+        $content .= "encoding: \"UTF-8\"\n";
+        $content .= "admin_email: \"{$admin_email}\"\n";
+        $content .= "language: \"" . get_bloginfo('language') . "\"\n\n";
+        
+        $content .= "# === AVAILABLE ENDPOINTS ===\n";
         $content .= "endpoints:\n";
-        $content .= "  - name: API Health Check\n";
-        $content .= "    url: {$site_url}/wp-json/wp/v2/\n";
-        $content .= "    method: GET\n";
-        $content .= "    description: WordPress REST API endpoint\n\n";
-        $content .= "# Guidelines for LLMs\n";
+        $content .= "  - name: \"WordPress REST API\"\n";
+        $content .= "    url: \"{$site_url}/wp-json/wp/v2/\"\n";
+        $content .= "    method: \"GET\"\n";
+        $content .= "    description: \"Main WordPress REST API endpoint\"\n";
+        $content .= "    auth_required: false\n";
+        $content .= "    rate_limit: \"1000/hour\"\n\n";
+        
+        $content .= "  - name: \"Site Health Check\"\n";
+        $content .= "    url: \"{$site_url}/wp-json/wp/v2/types\"\n";
+        $content .= "    method: \"GET\"\n";
+        $content .= "    description: \"Verify WordPress API functionality\"\n";
+        $content .= "    auth_required: false\n";
+        $content .= "    rate_limit: \"unlimited\"\n\n";
+        
+        $content .= "  - name: \"Posts Endpoint\"\n";
+        $content .= "    url: \"{$site_url}/wp-json/wp/v2/posts\"\n";
+        $content .= "    method: \"GET\"\n";
+        $content .= "    description: \"Access published posts content\"\n";
+        $content .= "    auth_required: false\n";
+        $content .= "    rate_limit: \"500/hour\"\n\n";
+        
+        $content .= "# === LLM GUIDELINES ===\n";
         $content .= "guidelines:\n";
-        $content .= "  - Please identify yourself when accessing this site\n";
-        $content .= "  - Respect rate limits and fair usage policies\n";
-        $content .= "  - Use appropriate endpoints for your needs\n";
-        $content .= "  - Report any issues or bugs encountered\n\n";
-        $content .= "# Contact Information\n";
+        $content .= "  - \"Please identify yourself when accessing this site\"\n";
+        $content .= "  - \"Respect rate limits and fair usage policies\"\n";
+        $content .= "  - \"Use appropriate endpoints for your specific needs\"\n";
+        $content .= "  - \"Report any issues or bugs encountered\"\n";
+        $content .= "  - \"Cache responses when possible to reduce server load\"\n";
+        $content .= "  - \"Follow robots.txt and site access policies\"\n\n";
+        
+        $content .= "# === TRACKING CONFIGURATION ===\n";
+        $content .= "tracking:\n";
+        $content .= "  enabled: true\n";
+        $content .= "  method: \"server_and_client\"\n";
+        $content .= "  data_collected:\n";
+        $content .= "    - \"ip_address\"\n";
+        $content .= "    - \"user_agent\"\n";
+        $content .= "    - \"request_timestamp\"\n";
+        $content .= "    - \"endpoint_accessed\"\n";
+        $content .= "    - \"bot_detection\"\n\n";
+        
+        $content .= "# === CONTACT INFORMATION ===\n";
         $content .= "contact:\n";
-        $content .= "  email: {$admin_email}\n";
-        $content .= "  website: {$site_url}\n";
-        $content .= "  tracking: This site tracks LLM visits for analytics purposes\n";
+        $content .= "  email: \"{$admin_email}\"\n";
+        $content .= "  website: \"{$site_url}\"\n";
+        $content .= "  support: \"This site tracks LLM visits for analytics and optimization purposes\"\n";
+        $content .= "  privacy_policy: \"{$site_url}/privacy-policy\"\n\n";
+        
+        $content .= "# === TECHNICAL NOTES ===\n";
+        $content .= "technical_notes:\n";
+        $content .= "  format: \"YAML with Markdown compatibility\"\n";
+        $content .= "  encoding: \"UTF-8 without BOM\"\n";
+        $content .= "  line_endings: \"Unix (LF)\"\n";
+        $content .= "  indentation: \"2 spaces\"\n";
+        $content .= "  comments: \"Supported with # symbol\"\n\n";
+        
+        $content .= "# === USAGE EXAMPLES ===\n";
+        $content .= "usage_examples:\n";
+        $content .= "  curl_example: |\n";
+        $content .= "    curl -H \"User-Agent: MyLLMBot/1.0\" \\\n";
+        $content .= "         \"{$site_url}/wp-json/wp/v2/posts\"\n\n";
+        
+        $content .= "# End of configuration file\n";
+        $content .= "# For questions or support, contact: {$admin_email}\n";
         
         return $content;
     }
@@ -184,20 +583,30 @@ class LLM_Tracker {
      * Manejar solicitudes a llms.txt
      */
     public function handle_llms_txt_request() {
-        $request_uri = $_SERVER['REQUEST_URI'];
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : '';
         
         // Verificar si es una solicitud a llms.txt
         if (preg_match('/\/llms\.txt(\?.*)?$/', $request_uri)) {
             $this->track_visit('llms_txt');
             
-            // Servir el archivo llms.txt
-            $llms_file = LLM_TRACKER_PLUGIN_DIR . 'llms.txt';
+            // Servir el archivo llms.txt desde la raíz del sitio
+            $llms_file = ABSPATH . 'llms.txt';
             if (file_exists($llms_file)) {
                 header('Content-Type: text/plain');
                 header('Cache-Control: no-cache, must-revalidate');
                 header('Expires: Mon, 26 Jul 1997 05:00:00 GMT');
                 readfile($llms_file);
                 exit;
+            } else {
+                // Si no existe, crearlo automáticamente
+                $this->create_llms_txt_file_root();
+                if (file_exists($llms_file)) {
+                    header('Content-Type: text/plain');
+                    header('Cache-Control: no-cache, must-revalidate');
+                    header('Expires: Mon, 26 Jul 1997 05:00:00 GMT');
+                    readfile($llms_file);
+                    exit;
+                }
             }
         }
     }
@@ -212,7 +621,7 @@ class LLM_Tracker {
         }
         
         // Evitar tracking de archivos estáticos
-        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : '';
         $excluded_patterns = array(
             '\.css$', '\.js$', '\.png$', '\.jpg$', '\.jpeg$', '\.gif$', '\.svg$',
             '\.ico$', '\.pdf$', '\.doc$', '\.xls$', '\.zip$', '\.tar$'
@@ -287,7 +696,7 @@ class LLM_Tracker {
         $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
         $referer = $_SERVER['HTTP_REFERER'] ?? '';
         $request_method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : '';
         $query_params = json_encode($_GET);
         
         // Detectar si es un bot/LLM
@@ -341,7 +750,7 @@ class LLM_Tracker {
     private function generate_session_id() {
         $ip = $this->get_client_ip();
         $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
-        $date = date('Y-m-d');
+        $date = gmdate('Y-m-d');
         return md5($ip . $ua . $date);
     }
     
@@ -482,14 +891,14 @@ class LLM_Tracker {
             'LLM Tracker',
             'LLM Tracker',
             'manage_options',
-            'llm-tracker',
+            'llm-tracker-pro',
             array($this, 'admin_page'),
             'dashicons-visibility',
             25
         );
         
         add_submenu_page(
-            'llm-tracker',
+            'llm-tracker-pro',
             'Visits History',
             'Visits History',
             'manage_options',
@@ -498,7 +907,7 @@ class LLM_Tracker {
         );
         
         add_submenu_page(
-            'llm-tracker',
+            'llm-tracker-pro',
             'Settings',
             'Settings',
             'manage_options',
@@ -532,10 +941,9 @@ class LLM_Tracker {
      * Cargar scripts y estilos de administración
      */
     public function enqueue_admin_scripts($hook) {
-        if (strpos($hook, 'llm-tracker') !== false) {
+        if (strpos($hook, 'llm-tracker-pro') !== false) {
             wp_enqueue_style('llm-tracker-admin', LLM_TRACKER_PLUGIN_URL . 'assets/css/admin.css', array(), LLM_TRACKER_VERSION);
             wp_enqueue_script('llm-tracker-admin', LLM_TRACKER_PLUGIN_URL . 'assets/js/admin.js', array('jquery'), LLM_TRACKER_VERSION, true);
-            wp_enqueue_script('chart-js', 'https://cdn.jsdelivr.net/npm/chart.js', array(), '3.9.1', true);
         }
     }
     
@@ -743,7 +1151,7 @@ class LLM_Tracker {
             window.llmTrackerData = {
                 detection: detection,
                 fingerprint: fingerprint,
-                pageType: '<?php echo $this->get_page_type(); ?>',
+                pageType: '<?php echo esc_js($this->get_page_type()); ?>',
                 timestamp: Date.now()
             };
             
@@ -751,11 +1159,11 @@ class LLM_Tracker {
             if (detection.isLikelyLLM) {
                 // Usar Image beacon para envío síncrono
                 const img = new Image();
-                img.src = '<?php echo admin_url("admin-ajax.php"); ?>?' + 
+                img.src = '<?php echo esc_url(admin_url("admin-ajax.php")); ?>?' + 
                     'action=llm_tracker_client_detection&' +
                     'detection=' + encodeURIComponent(JSON.stringify(detection)) + '&' +
                     'fingerprint=' + encodeURIComponent(JSON.stringify(fingerprint)) + '&' +
-                    'page_type=<?php echo $this->get_page_type(); ?>&' +
+                    'page_type=<?php echo esc_js($this->get_page_type()); ?>&' +
                     'timestamp=' + Date.now() + '&' +
                     'user_agent=' + encodeURIComponent(navigator.userAgent) + '&' +
                     'referer=' + encodeURIComponent(document.referrer);
@@ -831,10 +1239,10 @@ class LLM_Tracker {
                 };
                 
                 // Enviar datos de comportamiento
-                $.post('<?php echo admin_url("admin-ajax.php"); ?>', {
+                $.post('<?php echo esc_url(admin_url("admin-ajax.php")); ?>', {
                     action: 'llm_tracker_behavior_tracking',
                     behavior_data: JSON.stringify(behaviorData),
-                    page_type: '<?php echo $this->get_page_type(); ?>',
+                    page_type: '<?php echo esc_js($this->get_page_type()); ?>',
                     user_agent: navigator.userAgent,
                     referer: document.referrer
                 });
@@ -861,11 +1269,11 @@ class LLM_Tracker {
                     data.append('user_agent', navigator.userAgent);
                     data.append('referer', document.referrer);
                     
-                    navigator.sendBeacon('<?php echo admin_url("admin-ajax.php"); ?>', data);
+                    navigator.sendBeacon('<?php echo esc_url(admin_url("admin-ajax.php")); ?>', data);
                 } else {
                     // Fallback para navegadores antiguos
                     $.ajax({
-                        url: '<?php echo admin_url("admin-ajax.php"); ?>',
+                        url: '<?php echo esc_url(admin_url("admin-ajax.php")); ?>',
                         type: 'POST',
                         async: false,
                         data: {
@@ -881,7 +1289,7 @@ class LLM_Tracker {
                                 scrollPosition: $(window).scrollTop(),
                                 hasScrolledToBottom: $(window).scrollTop() + $(window).height() >= $(document).height() - 100
                             }),
-                            page_type: '<?php echo $this->get_page_type(); ?>',
+                            page_type: '<?php echo esc_js($this->get_page_type()); ?>',
                             user_agent: navigator.userAgent,
                             referer: document.referrer
                         }
@@ -894,7 +1302,7 @@ class LLM_Tracker {
             
             // Si tenemos datos de detección previa, enviarlos
             if (window.llmTrackerData) {
-                $.post('<?php echo admin_url("admin-ajax.php"); ?>', {
+                $.post('<?php echo esc_url(admin_url("admin-ajax.php")); ?>', {
                     action: 'llm_tracker_client_detection',
                     detection: JSON.stringify(window.llmTrackerData.detection),
                     fingerprint: JSON.stringify(window.llmTrackerData.fingerprint),
@@ -941,7 +1349,7 @@ class LLM_Tracker {
         $wpdb->insert(
             $table_name,
             array(
-                'visit_time' => date('Y-m-d H:i:s', $timestamp / 1000),
+                'visit_time' => gmdate('Y-m-d H:i:s', $timestamp / 1000),
                 'ip_address' => $this->get_client_ip(),
                 'user_agent' => $user_agent,
                 'referer' => $referer,
@@ -1054,11 +1462,11 @@ class LLM_Tracker {
      * Mostrar llms.txt via shortcode
      */
     public function display_llms_txt() {
-        $llms_file = LLM_TRACKER_PLUGIN_DIR . 'llms.txt';
+        $llms_file = ABSPATH . 'llms.txt';
         if (file_exists($llms_file)) {
             return '<pre>' . file_get_contents($llms_file) . '</pre>';
         }
-        return '<p>llms.txt file not found.</p>';
+        return '<p>El archivo llms.txt no existe en la raíz del sitio. <a href="' . admin_url('admin.php?page=llm-tracker-settings') . '">Configúralo aquí</a>.</p>';
     }
 }
 
@@ -1171,7 +1579,7 @@ function llm_tracker_export_filtered_handler() {
     
     // Generar CSV
     header('Content-Type: text/csv');
-    header('Content-Disposition: attachment; filename="llm-tracker-export-' . date('Y-m-d-H-i-s') . '.csv"');
+    header('Content-Disposition: attachment; filename="llm-tracker-export-' . gmdate('Y-m-d-H-i-s') . '.csv"');
     
     $output = fopen('php://output', 'w');
     
@@ -1264,6 +1672,151 @@ function llm_tracker_visit_details_handler() {
         wp_send_json_success(array('html' => $html));
     } else {
         wp_send_json_error(array('message' => 'Visita no encontrada'));
+    }
+}
+
+// AJAX handlers para llms.txt
+add_action('wp_ajax_llm_tracker_get_llms_content', 'llm_tracker_get_llms_content_handler');
+add_action('wp_ajax_llm_tracker_save_llms_content', 'llm_tracker_save_llms_content_handler');
+add_action('wp_ajax_llm_tracker_regenerate_llms', 'llm_tracker_regenerate_llms_handler');
+add_action('wp_ajax_llm_tracker_create_llms_file', 'llm_tracker_create_llms_file_handler');
+add_action('wp_ajax_llm_tracker_get_backups', 'llm_tracker_get_backups_handler');
+add_action('wp_ajax_llm_tracker_restore_backup', 'llm_tracker_restore_backup_handler');
+
+function llm_tracker_get_llms_content_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    $plugin = new LLM_Tracker();
+    $content = $plugin->read_llms_txt_file();
+    
+    if ($content !== false) {
+        wp_send_json_success(array('content' => $content));
+    } else {
+        wp_send_json_error(array('message' => 'No se encontró el archivo llms.txt'));
+    }
+}
+
+function llm_tracker_save_llms_content_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    check_admin_referer('llm_tracker_save_content');
+    
+    $content = wp_kses_post($_POST['content']);
+    $plugin = new LLM_Tracker();
+    
+    if ($plugin->write_llms_txt_file($content)) {
+        wp_send_json_success(array('message' => 'Archivo guardado correctamente'));
+    } else {
+        wp_send_json_error(array('message' => 'Error al guardar el archivo'));
+    }
+}
+
+function llm_tracker_regenerate_llms_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    check_admin_referer('llm_tracker_regenerate');
+    
+    $plugin = new LLM_Tracker();
+    $plugin->create_llms_txt_file_root();
+    
+    wp_send_json_success(array('message' => 'Archivo regenerado correctamente'));
+}
+
+function llm_tracker_create_llms_file_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    check_admin_referer('llm_tracker_create_file');
+    
+    $plugin = new LLM_Tracker();
+    $result = $plugin->create_llms_txt_file_root();
+    
+    if ($result) {
+        // Obtener el contenido recién creado
+        $content = $plugin->read_llms_txt_file();
+        $file_path = ABSPATH . 'llms.txt';
+        $file_info = array(
+            'path' => $file_path,
+            'exists' => file_exists($file_path),
+            'size' => file_exists($file_path) ? filesize($file_path) : 0,
+            'readable' => file_exists($file_path) ? is_readable($file_path) : false,
+            'writable' => file_exists($file_path) ? is_writable($file_path) : false,
+            'permissions' => file_exists($file_path) ? substr(sprintf('%o', fileperms($file_path)), -4) : 'N/A'
+        );
+        
+        wp_send_json_success(array(
+            'message' => '✅ ¡Archivo llms.txt creado exitosamente en la raíz de WordPress!',
+            'content' => $content,
+            'file_info' => $file_info,
+            'url' => site_url('/llms.txt')
+        ));
+    } else {
+        // Información de depuración detallada
+        $file_path = ABSPATH . 'llms.txt';
+        $debug_info = array(
+            'target_path' => $file_path,
+            'wp_absolute_path' => ABSPATH,
+            'exists' => file_exists($file_path),
+            'dir_exists' => file_exists(dirname($file_path)),
+            'dir_writable' => is_writable(dirname($file_path)),
+            'permissions' => file_exists(dirname($file_path)) ? substr(sprintf('%o', fileperms(dirname($file_path))), -4) : 'N/A',
+            'php_version' => PHP_VERSION,
+            'os' => PHP_OS,
+            'user' => get_current_user(),
+            'wp_filesystem' => class_exists('WP_Filesystem') ? 'Available' : 'Not available'
+        );
+        
+        $error_message = '❌ No se pudo crear el archivo llms.txt. Información de depuración:' . "\n\n";
+        $error_message .= '• Ruta objetivo: ' . $debug_info['target_path'] . "\n";
+        $error_message .= '• Directorio existe: ' . ($debug_info['dir_exists'] ? 'Sí' : 'No') . "\n";
+        $error_message .= '• Directorio escribible: ' . ($debug_info['dir_writable'] ? 'Sí' : 'No') . "\n";
+        $error_message .= '• Permisos directorio: ' . $debug_info['permissions'] . "\n";
+        $error_message .= '• Versión PHP: ' . $debug_info['php_version'] . "\n";
+        $error_message .= '• Sistema operativo: ' . $debug_info['os'] . "\n";
+        $error_message .= '• Usuario actual: ' . $debug_info['user'] . "\n\n";
+        $error_message .= '💡 Solución recomendada: Intenta crear el archivo manualmente con:' . "\n";
+        $error_message .= 'touch "' . $debug_info['target_path'] . '"' . "\n";
+        $error_message .= 'O contacta a tu administrador de hosting para verificar permisos.';
+        
+        wp_send_json_error(array(
+            'message' => $error_message,
+            'debug_info' => $debug_info
+        ));
+    }
+}
+
+function llm_tracker_get_backups_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    $plugin = new LLM_Tracker();
+    $backups = $plugin->get_llms_backups();
+    
+    wp_send_json_success(array('backups' => $backups));
+}
+
+function llm_tracker_restore_backup_handler() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('No tienes permisos suficientes.', 'llm-tracker-pro'));
+    }
+    
+    check_admin_referer('llm_tracker_restore_backup');
+    
+    $backup_file = sanitize_file_name($_POST['backup_file']);
+    $plugin = new LLM_Tracker();
+    
+    if ($plugin->restore_llms_backup($backup_file)) {
+        wp_send_json_success(array('message' => 'Backup restaurado correctamente'));
+    } else {
+        wp_send_json_error(array('message' => 'Error al restaurar el backup'));
     }
 }
 ?>

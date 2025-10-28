@@ -3,16 +3,21 @@
  * Visits history page for LLM Tracker
  */
 
+// Prevenir acceso directo
+if (!defined('ABSPATH')) {
+    exit;
+}
+
 // Verificar permisos
 if (!current_user_can('manage_options')) {
-    wp_die(__('You do not have sufficient permissions to access this page.'));
+    wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'llm-tracker-pro'));
 }
 
 global $wpdb;
 $table_name = $wpdb->prefix . 'llm_tracker_visits';
 
 // Verificar si la tabla existe
-$table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") == $table_name;
+$table_exists = $wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($table_name) . "'") == $table_name;
 if (!$table_exists) {
     echo '<div class="notice notice-error"><p>La tabla de tracking no existe. Por favor, desactiva y vuelve a activar el plugin.</p></div>';
     return;
@@ -73,15 +78,15 @@ if (!empty($where_conditions)) {
 }
 
 // Obtener total de registros para paginación
-$count_query = "SELECT COUNT(*) FROM $table_name $where_clause";
+$count_query = "SELECT COUNT(*) FROM {$table_name} {$where_clause}";
 if (!empty($where_params)) {
     $count_query = $wpdb->prepare($count_query, $where_params);
 }
-$total_visits = $wpdb->get_var($count_query);
+$total_visits = intval($wpdb->get_var($count_query));
 $total_pages = ceil($total_visits / $per_page);
 
 // Obtener visitas
-$query = "SELECT * FROM $table_name $where_clause ORDER BY visit_time DESC LIMIT %d OFFSET %d";
+$query = "SELECT * FROM {$table_name} {$where_clause} ORDER BY visit_time DESC LIMIT %d OFFSET %d";
 if (!empty($where_params)) {
     $query = $wpdb->prepare($query, array_merge($where_params, array($per_page, $offset)));
 } else {
@@ -90,7 +95,7 @@ if (!empty($where_params)) {
 $visits = $wpdb->get_results($query);
 
 // Obtener lista de bots únicos para filtro
-$bots_list = $wpdb->get_results("SELECT DISTINCT bot_name FROM $table_name WHERE bot_detected = 1 AND bot_name != '' ORDER BY bot_name");
+$bots_list = $wpdb->get_results("SELECT DISTINCT bot_name FROM {$table_name} WHERE bot_detected = 1 AND bot_name != '' ORDER BY bot_name");
 
 // Obtener estadísticas para el período seleccionado
 $stats_query = "SELECT 
@@ -99,28 +104,23 @@ $stats_query = "SELECT
     SUM(CASE WHEN bot_detected = 0 THEN 1 ELSE 0 END) as human_visits,
     COUNT(DISTINCT ip_address) as unique_ips,
     COUNT(DISTINCT DATE(visit_time)) as unique_days
-    FROM $table_name $where_clause";
+    FROM {$table_name} {$where_clause}";
 
 if (!empty($where_params)) {
     $stats_query = $wpdb->prepare($stats_query, $where_params);
 }
 $period_stats = $wpdb->get_row($stats_query);
 
-// Obtener visitas por día para el gráfico
-$chart_query = "SELECT 
-    DATE(visit_time) as visit_date,
-    COUNT(*) as total_visits,
-    SUM(CASE WHEN bot_detected = 1 THEN 1 ELSE 0 END) as bot_visits,
-    SUM(CASE WHEN bot_detected = 0 THEN 1 ELSE 0 END) as human_visits
-    FROM $table_name $where_clause 
-    GROUP BY DATE(visit_time) 
-    ORDER BY visit_date DESC 
-    LIMIT 30";
-
-if (!empty($where_params)) {
-    $chart_query = $wpdb->prepare($chart_query, $where_params);
+// Asegurar que tenemos valores por defecto
+if (!$period_stats) {
+    $period_stats = (object) array(
+        'total_visits' => 0,
+        'bot_visits' => 0,
+        'human_visits' => 0,
+        'unique_ips' => 0,
+        'unique_days' => 0
+    );
 }
-$daily_stats = $wpdb->get_results($chart_query);
 
 // Función helper para calcular tiempo relativo
 function time_ago($timestamp) {
@@ -175,14 +175,6 @@ function time_ago($timestamp) {
         </div>
     </div>
     
-    <!-- Gráfico de visitas por día -->
-    <div class="llm-tracker-chart-container">
-        <h3>Visitas por Día (Últimos 30 días del período)</h3>
-        <div class="chart-wrapper">
-            <canvas id="dailyVisitsChart"></canvas>
-        </div>
-    </div>
-    
     <!-- Filtros -->
     <div class="llm-tracker-filters">
         <form method="get" action="">
@@ -225,12 +217,9 @@ function time_ago($timestamp) {
                     <label>Atajos de fecha:</label>
                     <div class="date-shortcuts">
                         <button type="button" class="button button-small" onclick="setDateRange('today')">Hoy</button>
-                        <button type="button" class="button button-small" onclick="setDateRange('yesterday')">Ayer</button>
                         <button type="button" class="button button-small" onclick="setDateRange('7days')">7 días</button>
                         <button type="button" class="button button-small" onclick="setDateRange('30days')">30 días</button>
-                        <button type="button" class="button button-small" onclick="setDateRange('90days')">90 días</button>
                         <button type="button" class="button button-small" onclick="setDateRange('thismonth')">Este mes</button>
-                        <button type="button" class="button button-small" onclick="setDateRange('lastmonth')">Mes pasado</button>
                     </div>
                 </div>
             </div>
@@ -239,8 +228,7 @@ function time_ago($timestamp) {
                 <div class="filter-group">
                     <label>&nbsp;</label>
                     <input type="submit" class="button button-primary" value="Aplicar Filtros" />
-                    <a href="<?php echo admin_url('admin.php?page=llm-tracker-visits'); ?>" class="button">Limpiar</a>
-                    <button type="button" class="button" onclick="exportFilteredData()">Exportar CSV</button>
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=llm-tracker-visits')); ?>" class="button">Limpiar</a>
                 </div>
             </div>
         </form>
@@ -252,12 +240,9 @@ function time_ago($timestamp) {
             <strong>Total:</strong> <?php echo number_format($total_visits); ?> visitas
         </span>
         <?php if (!empty($filter_bot) || !empty($filter_date_from) || !empty($filter_date_to) || !empty($filter_ip)): ?>
-            <span class="stat-item filtered">
-                <strong>Filtrados:</strong> <?php echo number_format($total_visits); ?> visitas
-            </span>
             <span class="stat-item">
-                <strong>Período:</strong> <?php echo !empty($filter_date_from) ? date('d/m/Y', strtotime($filter_date_from)) : 'inicio'; ?> 
-                al <?php echo !empty($filter_date_to) ? date('d/m/Y', strtotime($filter_date_to)) : 'fin'; ?>
+                <strong>Período:</strong> <?php echo !empty($filter_date_from) ? esc_html(date('d/m/Y', strtotime($filter_date_from))) : 'inicio'; ?> 
+                al <?php echo !empty($filter_date_to) ? esc_html(date('d/m/Y', strtotime($filter_date_to))) : 'fin'; ?>
             </span>
         <?php endif; ?>
     </div>
@@ -274,7 +259,6 @@ function time_ago($timestamp) {
                     <th scope="col" class="manage-column">User Agent</th>
                     <th scope="col" class="manage-column">Origen</th>
                     <th scope="col" class="manage-column">País/Ciudad</th>
-                    <th scope="col" class="manage-column">Acciones</th>
                 </tr>
             </thead>
             <tbody>
@@ -282,8 +266,8 @@ function time_ago($timestamp) {
                     <?php foreach ($visits as $visit): ?>
                         <tr>
                             <td>
-                                <?php echo date('d/m/Y H:i:s', strtotime($visit->visit_time)); ?>
-                                <br><small><?php echo time_ago(strtotime($visit->visit_time)); ?></small>
+                                <?php echo esc_html(date('d/m/Y H:i:s', strtotime($visit->visit_time))); ?>
+                                <br><small><?php echo esc_html(time_ago(strtotime($visit->visit_time))); ?></small>
                             </td>
                             <td>
                                 <code><?php echo esc_html($visit->ip_address); ?></code>
@@ -309,7 +293,7 @@ function time_ago($timestamp) {
                             <td>
                                 <?php 
                                 if (!empty($visit->referer)) {
-                                    $referer_host = parse_url($visit->referer, PHP_URL_HOST);
+                                    $referer_host = wp_parse_url($visit->referer, PHP_URL_HOST);
                                     if ($referer_host) {
                                         echo '<a href="' . esc_url($visit->referer) . '" target="_blank">' . esc_html($referer_host) . '</a>';
                                     } else {
@@ -328,16 +312,11 @@ function time_ago($timestamp) {
                                 echo !empty($location) ? esc_html(implode(', ', $location)) : '-';
                                 ?>
                             </td>
-                            <td>
-                                <button type="button" class="button button-small" onclick="showVisitDetails(<?php echo $visit->id; ?>)">
-                                    Detalles
-                                </button>
-                            </td>
                         </tr>
                     <?php endforeach; ?>
                 <?php else: ?>
                     <tr>
-                        <td colspan="8">
+                        <td colspan="7">
                             <p>No se encontraron visitas con los filtros seleccionados.</p>
                         </td>
                     </tr>
@@ -365,19 +344,6 @@ function time_ago($timestamp) {
             </div>
         </div>
     <?php endif; ?>
-</div>
-
-<!-- Modal de detalles -->
-<div id="visit-details-modal" class="llm-tracker-modal" style="display: none;">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3>Detalles de la Visita</h3>
-            <button type="button" class="button-link" onclick="closeVisitDetails()">&times;</button>
-        </div>
-        <div class="modal-body" id="visit-details-content">
-            <!-- El contenido se cargará via AJAX -->
-        </div>
-    </div>
 </div>
 
 <style>
@@ -434,10 +400,6 @@ function time_ago($timestamp) {
     font-size: 14px;
 }
 
-.stat-item.filtered {
-    color: #d63638;
-}
-
 .llm-tracker-visits-table {
     margin: 20px 0;
 }
@@ -467,58 +429,82 @@ function time_ago($timestamp) {
     font-weight: bold;
 }
 
-.llm-tracker-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.5);
-    z-index: 100000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-content {
-    background: white;
+.llm-tracker-period-stats {
+    background: #fff;
+    border: 1px solid #ccd0d4;
     border-radius: 8px;
-    max-width: 800px;
-    width: 90%;
-    max-height: 80vh;
-    overflow-y: auto;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-.modal-header {
-    padding: 20px;
-    border-bottom: 1px solid #ccd0d4;
+.llm-tracker-period-stats h3 {
+    margin: 0 0 15px 0;
+    color: #1d2327;
+    font-size: 18px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+}
+
+.stat-item {
+    text-align: center;
+    padding: 15px;
+    background: #f6f7f7;
+    border-radius: 6px;
+    border-left: 4px solid #8c8f94;
+}
+
+.stat-item.bot {
+    border-left-color: #d63638;
+}
+
+.stat-item.human {
+    border-left-color: #00a32a;
+}
+
+.stat-number {
+    display: block;
+    font-size: 24px;
+    font-weight: bold;
+    color: #1d2327;
+    margin-bottom: 5px;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: #646970;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.date-shortcuts {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
 }
 
-.modal-header h3 {
-    margin: 0;
-}
-
-.modal-body {
-    padding: 20px;
-}
-
-.modal-body table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.modal-body td {
-    padding: 8px;
-    border-bottom: 1px solid #f0f0f0;
-    vertical-align: top;
-}
-
-.modal-body td:first-child {
-    font-weight: 600;
-    width: 150px;
+@media (max-width: 768px) {
+    .filter-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .filter-group {
+        min-width: auto;
+    }
+    
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+    
+    .llm-tracker-quick-stats {
+        flex-direction: column;
+        gap: 10px;
+    }
 }
 </style>
 
@@ -528,26 +514,7 @@ jQuery(document).ready(function($) {
     setInterval(function() {
         location.reload();
     }, 30000);
-    
-    // Inicializar gráfico de visitas por día
-    initDailyVisitsChart();
 });
-
-function showVisitDetails(visitId) {
-    jQuery.post(ajaxurl, {
-        action: 'llm_tracker_visit_details',
-        visit_id: visitId
-    }, function(response) {
-        if (response.success) {
-            jQuery('#visit-details-content').html(response.data.html);
-            jQuery('#visit-details-modal').show();
-        }
-    });
-}
-
-function closeVisitDetails() {
-    jQuery('#visit-details-modal').hide();
-}
 
 // Funciones para atajos de fecha
 function setDateRange(range) {
@@ -560,12 +527,6 @@ function setDateRange(range) {
             fromDate = today;
             toDate = today;
             break;
-        case 'yesterday':
-            fromDate = new Date(today);
-            fromDate.setDate(today.getDate() - 1);
-            toDate = new Date(today);
-            toDate.setDate(today.getDate() - 1);
-            break;
         case '7days':
             fromDate = new Date(today);
             fromDate.setDate(today.getDate() - 7);
@@ -576,18 +537,9 @@ function setDateRange(range) {
             fromDate.setDate(today.getDate() - 30);
             toDate = today;
             break;
-        case '90days':
-            fromDate = new Date(today);
-            fromDate.setDate(today.getDate() - 90);
-            toDate = today;
-            break;
         case 'thismonth':
             fromDate = new Date(today.getFullYear(), today.getMonth(), 1);
             toDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-            break;
-        case 'lastmonth':
-            fromDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-            toDate = new Date(today.getFullYear(), today.getMonth(), 0);
             break;
     }
     
@@ -606,244 +558,4 @@ function setDateRange(range) {
     // Enviar formulario
     jQuery('.llm-tracker-filters form').submit();
 }
-
-// Función para exportar datos filtrados
-function exportFilteredData() {
-    const form = jQuery('.llm-tracker-filters form');
-    const formData = new FormData(form[0]);
-    
-    // Agregar acción de exportación
-    formData.append('action', 'llm_tracker_export_filtered');
-    formData.append('export_format', 'csv');
-    
-    // Crear URL para descarga
-    const params = new URLSearchParams(formData);
-    const exportUrl = ajaxurl + '?' + params.toString();
-    
-    // Iniciar descarga
-    window.location.href = exportUrl;
-}
-
-// Inicializar gráfico de visitas por día
-function initDailyVisitsChart() {
-    const ctx = document.getElementById('dailyVisitsChart');
-    if (!ctx) return;
-    
-    <?php if (!empty($daily_stats)): ?>
-    // Preparar datos para el gráfico
-    const labels = [<?php echo implode(',', array_map(function($stat) { return "'".date('d/m', strtotime($stat->visit_date))."'"; }, array_reverse($daily_stats))); ?>];
-    const totalData = [<?php echo implode(',', array_map(function($stat) { return $stat->total_visits; }, array_reverse($daily_stats))); ?>];
-    const botData = [<?php echo implode(',', array_map(function($stat) { return $stat->bot_visits; }, array_reverse($daily_stats))); ?>];
-    const humanData = [<?php echo implode(',', array_map(function($stat) { return $stat->human_visits; }, array_reverse($daily_stats))); ?>];
-    
-    new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [
-                {
-                    label: 'Total Visitas',
-                    data: totalData,
-                    borderColor: '#3858e9',
-                    backgroundColor: 'rgba(56, 88, 233, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.4
-                },
-                {
-                    label: 'Visitas Bots',
-                    data: botData,
-                    borderColor: '#d63638',
-                    backgroundColor: 'rgba(214, 54, 56, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.4
-                },
-                {
-                    label: 'Visitas Humanas',
-                    data: humanData,
-                    borderColor: '#00a32a',
-                    backgroundColor: 'rgba(0, 163, 42, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.4
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'top',
-                    labels: {
-                        padding: 15,
-                        font: {
-                            size: 12
-                        }
-                    }
-                },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    titleColor: '#fff',
-                    bodyColor: '#fff',
-                    borderColor: '#ddd',
-                    borderWidth: 1
-                }
-            },
-            scales: {
-                x: {
-                    display: true,
-                    grid: {
-                        display: false
-                    },
-                    ticks: {
-                        font: {
-                            size: 11
-                        }
-                    }
-                },
-                y: {
-                    display: true,
-                    beginAtZero: true,
-                    grid: {
-                        color: 'rgba(0, 0, 0, 0.05)'
-                    },
-                    ticks: {
-                        font: {
-                            size: 11
-                        },
-                        stepSize: 1
-                    }
-                }
-            },
-            interaction: {
-                mode: 'nearest',
-                axis: 'x',
-                intersect: false
-            }
-        }
-    });
-    <?php endif; ?>
-}
-
-// Cerrar modal al hacer clic fuera
-jQuery(document).on('click', function(e) {
-    if (jQuery(e.target).hasClass('llm-tracker-modal')) {
-        closeVisitDetails();
-    }
-});
 </script>
-
-<style>
-.llm-tracker-period-stats {
-    background: #fff;
-    border: 1px solid #ccd0d4;
-    border-radius: 8px;
-    padding: 20px;
-    margin: 20px 0;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.llm-tracker-period-stats h3 {
-    margin: 0 0 20px 0;
-    color: #1d2327;
-    font-size: 18px;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 15px;
-}
-
-.stat-item {
-    text-align: center;
-    padding: 15px;
-    border-radius: 6px;
-    background: #f6f7f7;
-    border: 1px solid #e0e0e0;
-}
-
-.stat-item.bot {
-    background: rgba(214, 54, 56, 0.1);
-    border-color: rgba(214, 54, 56, 0.3);
-}
-
-.stat-item.human {
-    background: rgba(0, 163, 42, 0.1);
-    border-color: rgba(0, 163, 42, 0.3);
-}
-
-.stat-number {
-    display: block;
-    font-size: 24px;
-    font-weight: bold;
-    color: #1d2327;
-    margin-bottom: 5px;
-}
-
-.stat-label {
-    display: block;
-    font-size: 12px;
-    color: #646970;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.date-shortcuts {
-    display: flex;
-    gap: 5px;
-    flex-wrap: wrap;
-}
-
-.date-shortcuts .button.button-small {
-    font-size: 11px;
-    padding: 0 8px;
-    height: 28px;
-    line-height: 26px;
-}
-
-.llm-tracker-chart-container {
-    background: #fff;
-    border: 1px solid #ccd0d4;
-    border-radius: 8px;
-    padding: 20px;
-    margin: 20px 0;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.llm-tracker-chart-container h3 {
-    margin: 0 0 20px 0;
-    color: #1d2327;
-    font-size: 18px;
-}
-
-.chart-wrapper {
-    height: 300px;
-    position: relative;
-}
-
-@media (max-width: 768px) {
-    .stats-grid {
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 10px;
-    }
-    
-    .stat-number {
-        font-size: 20px;
-    }
-    
-    .date-shortcuts {
-        flex-direction: column;
-        gap: 5px;
-    }
-    
-    .date-shortcuts .button.button-small {
-        width: 100%;
-        text-align: center;
-    }
-}
-</style>
